@@ -104,6 +104,7 @@ def scrape_product(page, url):
         "url": url,
         "product_name": None,
         "cheapest_price": None,
+        "stock_available": None,
         "status": "failed"
     }
 
@@ -192,6 +193,25 @@ def scrape_product(page, url):
         logger.warning(f"No valid price found for {url}")
         if product_data["product_name"]:
              product_data["status"] = "partial"
+
+    # Extract Stock Availability
+    # Button ".beli_button" contains a span with either "Stok Habis" or "+ Keranjang"
+    try:
+        # Check for "Stok Habis" span inside the button
+        stok_habis_locator = page.locator(".beli_button span:has-text('Stok Habis')")
+        if stok_habis_locator.count() > 0:
+            product_data["stock_available"] = False
+        else:
+            # Check for "+ Keranjang" span to confirm in stock
+            keranjang_locator = page.locator(".beli_button span:has-text('+ Keranjang')")
+            if keranjang_locator.count() > 0:
+                product_data["stock_available"] = True
+            else:
+                # If neither found, default to None (unknown)
+                product_data["stock_available"] = None
+    except Exception as e:
+        logger.warning(f"Error extracting stock availability for {url}: {e}")
+        product_data["stock_available"] = None
 
     return product_data
 
@@ -338,6 +358,20 @@ def main():
     # Save final output
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         json.dump(final_results, f, indent=4, ensure_ascii=False)
+    
+    # Save to CSV
+    import csv
+    csv_file = "output.csv"
+    csv_columns = ["url", "product_name", "cheapest_price", "stock_available", "status"]
+    try:
+        with open(csv_file, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=csv_columns)
+            writer.writeheader()
+            for data in final_results:
+                writer.writerow(data)
+        logger.info(f"Saved results to {csv_file}")
+    except IOError as e:
+        logger.error(f"I/O error while writing to {csv_file}: {e}")
 
     logger.info("Scraping completed. Check output.json and scraper.log.")
 
