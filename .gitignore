@@ -1,0 +1,17 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Scraper Data
+user_data_dir/
+debug.html
+scraper.log
+output.json
+
+# Configuration (Optional: exclude if contains sensitive proxies)
+# proxies.txt
+
+# Editor
+.vscode/
+.idea/
