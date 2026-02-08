@@ -109,31 +109,77 @@ def scrape_product(page, url):
 
     # Extract Product Name
     try:
-        # Primary strategy: H1
-        if page.locator("h1").count() > 0:
-            product_data["product_name"] = page.locator("h1").first.text_content().strip()
-        else:
-             # Fallback: Meta title
+        # Strategy 1 (Preferred): Open Graph Title
+        # <meta property="og:title" content="BIMOLI MINYAK GORENG  DRG 5000mL | Klik Indogrosir" />
+        og_title_el = page.locator("meta[property='og:title']").first
+        if og_title_el.count() > 0:
+            raw_title = og_title_el.get_attribute("content")
+            if raw_title:
+                # Remove the site name suffix if present
+                clean_title = raw_title.split("|")[0].strip()
+                product_data["product_name"] = re.sub(r'\s+', ' ', clean_title)
+        
+        # Strategy 2: H4 (Fallback)
+        if not product_data["product_name"]:
+            product_name_locator = page.locator(".col-lg-8 h4").first
+            if product_name_locator.count() > 0:
+                clean_title = product_name_locator.text_content().strip()
+                product_data["product_name"] = re.sub(r'\s+', ' ', clean_title)
+            elif page.locator("h4").count() > 0:
+                 # Filter out "Masuk ke Akun"
+                 for i in range(page.locator("h4").count()):
+                     text = page.locator("h4").nth(i).text_content().strip()
+                     if "Masuk" not in text and "Login" not in text:
+                         product_data["product_name"] = re.sub(r'\s+', ' ', text)
+                         break
+                         
+        # Strategy 3: Meta Title (Fallback)
+        if not product_data["product_name"]:
              title_el = page.locator("title")
              if title_el.count() > 0:
-                 product_data["product_name"] = title_el.first.text_content().strip()
+                 raw_title = title_el.first.text_content().strip()
+                 clean_title = raw_title.split("|")[0].strip()
+                 product_data["product_name"] = re.sub(r'\s+', ' ', clean_title)
+
     except Exception as e:
         logger.warning(f"Error extracting name for {url}: {e}")
 
     # Extract Price
+    # Strategy 1 (Preferred): Open Graph Description
+    # <meta property="og:description" content="Harga Termurah Rp99.475" />
     prices = []
     try:
-        # 1. Try generic price pattern in body
-        body_text = page.locator("body").text_content()
-        found_prices = re.findall(r'Rp\s?[\d,.]+', body_text)
+        og_desc_el = page.locator("meta[property='og:description']").first
+        if og_desc_el.count() > 0:
+            og_desc = og_desc_el.get_attribute("content")
+            if og_desc:
+                # Extract number from "Harga Termurah Rp99.475"
+                matches = re.findall(r'Rp\s?[\d,.]+', og_desc)
+                for m in matches:
+                    clean = re.sub(r'[^\d]', '', m)
+                    if clean:
+                        prices.append(int(clean))
+                        logger.debug(f"Found price from og:description: {clean}")
+
+        # Strategy 2: Radio Button 'harga' attribute
+        if not prices:
+            prdinfo_inputs = page.locator("input.prdinfo")
+            if prdinfo_inputs.count() > 0:
+                for i in range(prdinfo_inputs.count()):
+                    harga_attr = prdinfo_inputs.nth(i).get_attribute("harga")
+                    if harga_attr and harga_attr.isdigit():
+                        prices.append(int(harga_attr))
         
-        for price_str in found_prices:
-            clean_str = re.sub(r'[^\d]', '', price_str)
-            if clean_str:
-                val = int(clean_str)
-                # Filter unreasonable prices
-                if val > 100 and val < 100000000: 
-                    prices.append(val)
+        # Strategy 3: Fallback to text scan
+        if not prices:
+            body_text = page.locator("body").text_content()
+            found_prices = re.findall(r'Rp\s?[\d.]+', body_text)
+            for price_str in found_prices:
+                clean_str = re.sub(r'[^\d]', '', price_str)
+                if clean_str:
+                    val = int(clean_str)
+                    if val > 100 and val < 100000000: 
+                        prices.append(val)
         
     except Exception as e:
         logger.warning(f"Error extracting prices for {url}: {e}")
