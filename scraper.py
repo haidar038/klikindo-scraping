@@ -11,6 +11,7 @@ from playwright.sync_api import sync_playwright
 # Configuration
 INPUT_FILE = "urls.txt"
 OUTPUT_FILE = "output.json"
+OUTPUT_JSONL = "output.jsonl"  # Real-time JSON Lines
 PROXY_FILE = ""  # Disabled: Direct Connection
 LOG_FILE = "scraper.log"
 USER_DATA_DIR = "user_data_dir"  # Folder for persistent session/cookies
@@ -82,6 +83,27 @@ def append_to_csv(data):
             writer.writerow(data)
     except IOError as e:
         logger.error(f"I/O error appending to {csv_file}: {e}")
+
+def append_to_jsonl(data):
+    """Appends a single data row to output.jsonl immediately."""
+    try:
+        with open(OUTPUT_JSONL, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(data, ensure_ascii=False) + "\n")
+    except IOError as e:
+        logger.error(f"I/O error appending to {OUTPUT_JSONL}: {e}")
+
+def get_processed_count():
+    """Returns number of processed items based on output.csv line count (minus header)."""
+    csv_file = "output.csv"
+    if not Path(csv_file).exists():
+        return 0
+    
+    try:
+        with open(csv_file, 'r', encoding='utf-8') as f:
+            # Efficiently count lines
+            return sum(1 for line in f) - 1 # Minus header
+    except:
+        return 0
 
 def simulate_interaction(page):
     """Simulates mouse movements and scrolling to appear human-like."""
@@ -291,8 +313,9 @@ def run_scraper_batch(urls, proxy_server=None):
                 data = scrape_product(page, url)
                 if data:
                     results.append(data)
-                    # Save to CSV immediately
+                    # Save to CSV and JSONL immediately
                     append_to_csv(data)
+                    append_to_jsonl(data)
                     
                     if data["status"] == "success":
                         success_count += 1
@@ -335,29 +358,25 @@ def main():
     proxies = load_proxies()
     logger.info(f"Loaded {len(proxies)} proxies.")
     
-    # Load checkpoint if exists (for resume capability)
+    # Resume logic based on output.csv line count
+    start_index = get_processed_count()
+    if start_index > 0:
+        logger.info(f"Resuming from index {start_index} (based on output.csv count).")
+        if start_index >= len(urls):
+             logger.info("All URLs already processed according to output.csv. Stopping.")
+             return
+        urls_to_process = urls[start_index:]
+    else:
+        urls_to_process = urls
+
+
     final_results = []
-    if Path(CHECKPOINT_FILE).exists():
-        try:
-            with open(CHECKPOINT_FILE, "r", encoding="utf-8") as f:
-                checkpoint_data = json.load(f)
-                final_results = checkpoint_data.get("results", [])
-                completed_urls = {r["url"] for r in final_results}
-                urls = [u for u in urls if u not in completed_urls]
-                logger.info(f"Resumed from checkpoint: {len(final_results)} done, {len(urls)} remaining.")
-        except Exception as e:
-            logger.warning(f"Failed to load checkpoint: {e}. Starting fresh.")
-            final_results = []
-    
-    if not urls:
-        logger.info("All URLs already processed! Delete checkpoint.json to restart.")
-        return
     
     # Add None to represent "Direct Connection" (use as last resort or first attempt)
     # Strategy: If we have proxies, use them randomly. If none, use direct.
     proxy_pool = proxies if proxies else [None]
     
-    urls_to_process = urls
+    # NOTE: urls_to_process is already set by resume logic above!
     
     current_proxy_index = 0
     max_global_retries = 5 # Avoid infinite loops
@@ -384,16 +403,16 @@ def main():
         
         final_results.extend(batch_results)
         
-        # Save checkpoint after each batch (for resume capability)
-        try:
-            with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
-                json.dump({"results": final_results}, f, ensure_ascii=False)
-            logger.info(f"Checkpoint saved: {len(final_results)} total results.")
-        except Exception as e:
-            logger.warning(f"Failed to save checkpoint: {e}")
-        
         # Determine which URLs are done
         processed_urls = {res["url"] for res in batch_results}
+        # In this new logic, urls_to_process is just a slice of the main list.
+        # But run_scraper_batch returns what it processed.
+        # We need to advance our index or slice.
+        # Since run_scraper_batch might return partial results if it failed...
+        # Wait, run_scraper_batch loops through its input list.
+        # If it returns, we assume it finished (or failed and returned distinct results).
+        
+        # Actually, simpler: just remove processed form urls_to_process
         urls_to_process = [u for u in urls_to_process if u not in processed_urls]
         
         if not urls_to_process:

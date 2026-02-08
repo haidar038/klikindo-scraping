@@ -8,6 +8,7 @@ user_data_dir/
 debug.html
 scraper.log
 output.json
+output.jsonl
 output.csv
 
 # Configuration (Optional: exclude if contains sensitive proxies)
