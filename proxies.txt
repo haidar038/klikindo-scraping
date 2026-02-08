@@ -1,4 +1,19 @@
-# Add proxies here, one per line
-# Format: protocol://user:pass@ip:port or ip:port
-# Example: http://user:pass@1.2.3.4:8080
-# Example: 1.2.3.4:8080
+# Proxy Format Examples (one per line, delete this comment when using real proxies)
+# Format: protocol://user:password@host:port OR protocol://host:port
+
+# HTTP Proxy Examples:
+# http://username:password@proxy1.example.com:8080
+# http://123.45.67.89:3128
+
+# SOCKS5 Proxy Examples:
+# socks5://username:password@proxy2.example.com:1080
+# socks5://98.76.54.32:1080
+
+# Residential Proxy Provider Examples (paid services):
+# http://user-abc123:pass456@gate.smartproxy.com:7000
+# http://user-xyz789:secret@proxy.oxylabs.io:7777
+# http://customer-abc:pass@pr.webshare.io:80
+
+# Free Proxy (not recommended for production, unstable):
+# http://51.158.68.68:8811
+# http://167.71.5.83:3128

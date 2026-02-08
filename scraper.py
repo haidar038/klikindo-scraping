@@ -4,15 +4,24 @@ import random
 import logging
 import re
 import shutil
+import csv
 from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 # Configuration
 INPUT_FILE = "urls.txt"
 OUTPUT_FILE = "output.json"
-PROXY_FILE = "proxies.txt"
+PROXY_FILE = ""  # Disabled: Direct Connection
 LOG_FILE = "scraper.log"
 USER_DATA_DIR = "user_data_dir"  # Folder for persistent session/cookies
+CHECKPOINT_FILE = "checkpoint.json"  # For resume capability
+
+# Settings for Direct Connection (No Proxy)
+# We need moderate delays to avoid immediate IP bans, but not as slow as 60s
+BATCH_SIZE = 50  # Pause after this many URLs
+BATCH_PAUSE_MIN = 60  # 1 minute
+BATCH_PAUSE_MAX = 120  # 2 minutes
+SESSION_ROTATE_EVERY = 200  # Rotate session less frequently
 
 # Logger setup
 logging.basicConfig(
@@ -34,7 +43,7 @@ except ImportError:
 
 def load_proxies():
     """Load proxies from file."""
-    if not Path(PROXY_FILE).exists():
+    if not PROXY_FILE or not Path(PROXY_FILE).exists():
         return []
     
     proxies = []
@@ -49,11 +58,30 @@ def load_proxies():
                 proxies.append(line)
     return proxies
 
-def human_delay(min_seconds=3, max_seconds=7):
-    """Random delay to simulate human reading time."""
+def human_delay(min_seconds=10, max_seconds=20):
+    """Random delay to simulate human reading time. Moderate delay for Direct Connection."""
     sleep_time = random.uniform(min_seconds, max_seconds)
-    logger.debug(f"Sleeping for {sleep_time:.2f} seconds...")
+    logger.info(f"Waiting {sleep_time:.1f} seconds...")
     time.sleep(sleep_time)
+
+def append_to_csv(data):
+    """Appends a single data row to output.csv immediately."""
+    csv_file = "output.csv"
+    csv_columns = ["url", "product_name", "cheapest_price", "stock_available", "status", "timestamp"]
+    
+    # Add timestamp
+    data["timestamp"] = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    file_exists = Path(csv_file).exists()
+    
+    try:
+        with open(csv_file, 'a', newline='', encoding='utf-8') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=csv_columns)
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow(data)
+    except IOError as e:
+        logger.error(f"I/O error appending to {csv_file}: {e}")
 
 def simulate_interaction(page):
     """Simulates mouse movements and scrolling to appear human-like."""
@@ -86,19 +114,20 @@ def scrape_product(page, url):
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            # wait_until='domcontentloaded' is faster than 'load'
-            page.goto(url, timeout=60000, wait_until="domcontentloaded")
+            # Standard timeout for direct connection
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
             break
         except Exception as e:
             logger.warning(f"Attempt {attempt+1} failed for {url}: {e}")
             if attempt == max_retries - 1:
                 logger.error(f"Failed to load {url} after {max_retries} attempts")
-                raise # Re-raise to trigger proxy rotation if needed
+                # Don't raise on direct connection, just fail this URL
+                # raise 
             time.sleep(random.uniform(5, 10))
 
-    human_delay(2, 5) # Initial delay after load
-    simulate_interaction(page)
-    human_delay(2, 4) # Delay after interaction
+    human_delay(2, 4) # Initial delay after load
+    # simulate_interaction(page) # Optional: Enable if specific behavior checks needed
+    # human_delay(1, 2)
 
     product_data = {
         "url": url,
@@ -254,6 +283,7 @@ def run_scraper_batch(urls, proxy_server=None):
             logger.info("Playwright Stealth applied.")
 
         success_count = 0
+        total_processed_in_session = 0
         for i, url in enumerate(urls):
             logger.info(f"Processing {i+1}/{len(urls)}")
             
@@ -261,8 +291,12 @@ def run_scraper_batch(urls, proxy_server=None):
                 data = scrape_product(page, url)
                 if data:
                     results.append(data)
+                    # Save to CSV immediately
+                    append_to_csv(data)
+                    
                     if data["status"] == "success":
                         success_count += 1
+                total_processed_in_session += 1
             except Exception as e:
                 logger.error(f"Fatal error during scraping {url}: {e}")
                 # If we hit a fatal error (like network timeout repeated), we might want to rotate proxy
@@ -275,7 +309,14 @@ def run_scraper_batch(urls, proxy_server=None):
                  context.close()
                  return results, False
 
-            human_delay(8, 15)
+            # Extended delay for no-proxy safe mode
+            human_delay()
+            
+            # Batch pause: rest every BATCH_SIZE URLs
+            if (i + 1) % BATCH_SIZE == 0 and (i + 1) < len(urls):
+                pause_time = random.uniform(BATCH_PAUSE_MIN, BATCH_PAUSE_MAX)
+                logger.info(f"Batch pause: resting for {pause_time/60:.1f} minutes...")
+                time.sleep(pause_time)
 
         context.close()
         return results, True # Success
@@ -294,11 +335,28 @@ def main():
     proxies = load_proxies()
     logger.info(f"Loaded {len(proxies)} proxies.")
     
+    # Load checkpoint if exists (for resume capability)
+    final_results = []
+    if Path(CHECKPOINT_FILE).exists():
+        try:
+            with open(CHECKPOINT_FILE, "r", encoding="utf-8") as f:
+                checkpoint_data = json.load(f)
+                final_results = checkpoint_data.get("results", [])
+                completed_urls = {r["url"] for r in final_results}
+                urls = [u for u in urls if u not in completed_urls]
+                logger.info(f"Resumed from checkpoint: {len(final_results)} done, {len(urls)} remaining.")
+        except Exception as e:
+            logger.warning(f"Failed to load checkpoint: {e}. Starting fresh.")
+            final_results = []
+    
+    if not urls:
+        logger.info("All URLs already processed! Delete checkpoint.json to restart.")
+        return
+    
     # Add None to represent "Direct Connection" (use as last resort or first attempt)
     # Strategy: If we have proxies, use them randomly. If none, use direct.
     proxy_pool = proxies if proxies else [None]
     
-    final_results = []
     urls_to_process = urls
     
     current_proxy_index = 0
@@ -325,6 +383,14 @@ def main():
         batch_results, completed_cleanly = run_scraper_batch(urls_to_process, current_proxy)
         
         final_results.extend(batch_results)
+        
+        # Save checkpoint after each batch (for resume capability)
+        try:
+            with open(CHECKPOINT_FILE, "w", encoding="utf-8") as f:
+                json.dump({"results": final_results}, f, ensure_ascii=False)
+            logger.info(f"Checkpoint saved: {len(final_results)} total results.")
+        except Exception as e:
+            logger.warning(f"Failed to save checkpoint: {e}")
         
         # Determine which URLs are done
         processed_urls = {res["url"] for res in batch_results}
@@ -355,25 +421,19 @@ def main():
              # If urls_to_process is empty, we are done.
              pass
 
-    # Save final output
+    # Delete checkpoint file on successful completion
+    if Path(CHECKPOINT_FILE).exists():
+        try:
+            Path(CHECKPOINT_FILE).unlink()
+            logger.info("Checkpoint file removed (scraping complete).")
+        except:
+            pass
+
+    # Save final output (JSON only, CSV is real-time)
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         json.dump(final_results, f, indent=4, ensure_ascii=False)
     
-    # Save to CSV
-    import csv
-    csv_file = "output.csv"
-    csv_columns = ["url", "product_name", "cheapest_price", "stock_available", "status"]
-    try:
-        with open(csv_file, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=csv_columns)
-            writer.writeheader()
-            for data in final_results:
-                writer.writerow(data)
-        logger.info(f"Saved results to {csv_file}")
-    except IOError as e:
-        logger.error(f"I/O error while writing to {csv_file}: {e}")
-
-    logger.info("Scraping completed. Check output.json and scraper.log.")
+    logger.info("Scraping completed. Check output.json and output.csv.")
 
 if __name__ == "__main__":
     main()

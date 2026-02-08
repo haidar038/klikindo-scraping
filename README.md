@@ -1,15 +1,16 @@
 # KlikIndogrosir Product Scraper
 
-A robust, Cloudflare-safe web scraper designed to extract product data (name and cheapest price) from KlikIndogrosir. This tool is built with **Playwright** and includes advanced anti-detection features to ensure reliability.
+A robust, Cloudflare-safe web scraper designed to extract product data (name, cheapest price, and stock availability) from KlikIndogrosir. This tool is built with **Playwright** and includes advanced anti-detection features and resilience mechanisms for large-scale scraping.
 
 ## 🚀 Features
 
-- **Cloudflare Evasion**: Uses `playwright-stealth` and realistic browser behavior to bypass bot detection.
-- **Proxy Rotation**: Automatically rotates proxies from `proxies.txt` upon detection or errors.
+- **Cloudflare Evasion**: Uses `playwright-stealth` and real browser behavior to bypass bot detection.
+- **Stock Availability Detection**: Accurately identifies if a product is in stock or out of stock.
+- **Real-Time CSV Saving**: Data is appended to `output.csv` immediately after scraping each item, preventing data loss.
+- **Checkpoint & Resume**: Automatically saves progress to `checkpoint.json`. If interrupted, simply run the script again to resume from where it left off.
+- **Flexible Proxy Support**: Supports both proxy rotation and **No-Proxy Safe Mode** (Direct Connection with moderate delays).
 - **Session Persistence**: Maintains session cookies in `user_data_dir` to simulate a real user's long-term browsing.
-- **Human-like Behavior**: Simulates random mouse movements, scrolling, and reading delays.
-- **Robust Error Handling**: Includes retries and exponential backoff.
-- **Batch Processing**: Reads URLs from `urls.txt` and saves results to `output.json`.
+- **Batch Processing Settings**: Configurable batch pauses (e.g., pause every 50 URLs) to reduce ban risk.
 
 ## 📋 Requirements
 
@@ -67,17 +68,18 @@ https://www.klikindogrosir.com/product_details/0003041
 https://www.klikindogrosir.com/product_details/0003701
 ```
 
-### 2. Proxies (`proxies.txt`)
+### 2. Proxies (`http_proxies.txt` or `indo_proxies.txt`)
 
-To enable proxy rotation, add your proxies to `proxies.txt`. Supports both authenticated and public proxies:
+To enable proxy rotation, update `PROXY_FILE` in `scraper.py` to point to your proxy list file.
+To run **without proxies** (uses your own IP), set `PROXY_FILE` to an empty string `""` in `scraper.py`.
 
-```text
-# Format: protocol://user:pass@ip:port
-http://user:pass@123.45.67.89:8080
-socks5://123.45.67.89:1080
-```
+### 3. Delays & Safety
 
-> **Note**: If `proxies.txt` is empty or missing, the scraper will use your direct internet connection.
+Open `scraper.py` to adjust:
+
+- `human_delay`: Time between requests.
+- `BATCH_SIZE`: Number of URLs before taking a long break.
+- `BATCH_PAUSE_MIN` / `BATCH_PAUSE_MAX`: Duration of the batch break.
 
 ## 🏃 Usage
 
@@ -96,22 +98,20 @@ source venv/bin/activate
 python scraper.py
 ```
 
-### Output
+## 📊 Output
 
-- **Console**: Live progress and logging.
-- **`scraper.log`**: Detailed execution logs for debugging.
-- **`output.json`**: Structured data of scraped products.
+### 1. `output.csv` (Real-Time)
 
-```json
-[
-    {
-        "url": "https://www.klikindogrosir.com/product_details/0003041",
-        "product_name": "Product Name Example",
-        "cheapest_price": 15000,
-        "status": "success"
-    }
-]
-```
+Data is saved here **immediately** as it is scraped. Open this file to monitor progress.
+Columns: `url`, `product_name`, `cheapest_price`, `stock_available`, `status`, `timestamp`
+
+### 2. `output.json` (Final Summary)
+
+Generated at the very end of the process, containing the full list of results.
+
+### 3. `checkpoint.json`
+
+A temporary file used to store progress. **Delete this file if you want to restart scraping from the beginning.**
 
 ## ⚠️ Disclaimer
 
